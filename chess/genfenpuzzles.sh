@@ -63,8 +63,8 @@ MAX_NUM_PAGES=$(( 16 * 1024 * 1024 / 96 ))
 
 if [ "${DRY_RUN}" = "false" ]
 then
-    rm -fr ./fenpuzzles
-    mkdir fenpuzzles
+    rm -fr ./fenpuzzles.bash
+    mkdir fenpuzzles.bash
 else
     echo "Dry run, no puzzles will be generated..."
 fi 
@@ -178,7 +178,7 @@ while IFS='$\n' read -r line; do
         IMOVE=$(move_to_i $move ${REVERSE})
 
         cd ./output
-        OUTFILE_PREFIX=../fenpuzzles/puzzle-${PUZZLE[0]}-${RATING}-${THEME_TAG}
+        OUTFILE_PREFIX=../fenpuzzles.bash/puzzle-${PUZZLE[0]}-${RATING}-${THEME_TAG}
         OUTFILE=${OUTFILE_PREFIX}-$(printf '%02d' ${move_count}).txt
         echo ${PUZZLE[0]},${EFEN},${IMOVE},${move_count},${#MOVES[@]} > ${OUTFILE}
         [ ${VERBOSE} = "true" ] && echo Processed move ${move_count} of ${PUZZLE[0]} ♙ 
