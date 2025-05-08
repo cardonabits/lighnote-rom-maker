@@ -1,7 +1,7 @@
 use clap::{Arg, Command};
 use csv::{Reader, StringRecord};
 use indicatif::ProgressBar;
-use std::{error::Error, thread::current};
+use std::error::Error;
 use std::fs;
 use chess_puzzle_gen::{ChessMove, ChessError, compress_fen, expand_fen, move_to_index, reverse_fen};
 
@@ -217,7 +217,7 @@ fn should_skip_puzzle(puzzle: &Puzzle, config: &Config) -> bool {
 
     // Check theme tag if specified
     if let Some(theme) = &config.theme_tag {
-        if !puzzle.themes.iter().any(|t| t == theme) {
+        if !puzzle.themes.iter().any(|t| t.contains(theme)) {
             return true;
         }
     }
@@ -242,7 +242,7 @@ fn skip_reason(puzzle: &Puzzle, config: &Config) -> String {
         return format!("rating {} < min {}", puzzle.rating, config.min_rating);
     }
     if let Some(theme) = &config.theme_tag {
-        if !puzzle.themes.iter().any(|t| t == theme) {
+        if !puzzle.themes.iter().any(|t| t.contains(theme)) {
             return format!("missing required theme '{}' (has: {})", theme, puzzle.themes.join(", "));
         }
     }
