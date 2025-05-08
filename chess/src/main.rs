@@ -27,6 +27,8 @@ struct Config {
     exclude_pieces: Vec<char>,
     last_move_pieces: Vec<char>,
     max_num_pages: usize,
+    from_puzzle_id: Option<String>,
+    to_puzzle_id: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -48,6 +50,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         .arg(Arg::new("min-rating").long("min-rating").value_name("RATING").default_value("500"))
         .arg(Arg::new("exclude-pieces").long("exclude-pieces").value_name("PIECES"))
         .arg(Arg::new("last-move-pieces").long("last-move-pieces").value_name("PIECES").default_value("prnbkq"))
+        .arg(Arg::new("from-puzzle-id")
+            .long("from-puzzle-id")
+            .value_name("ID")
+            .help("Skip puzzles with IDs lexicographically before this"))
+        .arg(Arg::new("to-puzzle-id")
+            .long("to-puzzle-id")
+            .value_name("ID")
+            .help("Skip puzzles with IDs lexicographically after this"))
         .get_matches();
 
     let config = Config {
@@ -69,6 +79,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             .chars()
             .collect(),
         max_num_pages: 16 * 1024 * 1024 / 96,
+        from_puzzle_id: matches.get_one::<String>("from-puzzle-id").cloned(),
+        to_puzzle_id: matches.get_one::<String>("to-puzzle-id").cloned(),
     };
 
     if config.dry_run {
@@ -90,6 +102,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("  Excluding pieces: {:?}", config.exclude_pieces);
         }
         println!("  Last move pieces: {:?}", config.last_move_pieces);
+        if let Some(from_id) = &config.from_puzzle_id {
+            println!("  From puzzle ID: {}", from_id);
+        }
+        if let Some(to_id) = &config.to_puzzle_id {
+            println!("  To puzzle ID: {}", to_id);
+        }
     }
 
     let mut rdr = Reader::from_reader(std::io::stdin());
@@ -222,6 +240,18 @@ fn should_skip_puzzle(puzzle: &Puzzle, config: &Config) -> bool {
         }
     }
 
+    // Check puzzle ID range
+    if let Some(from_id) = &config.from_puzzle_id {
+        if puzzle.id < *from_id {
+            return true;
+        }
+    }
+    if let Some(to_id) = &config.to_puzzle_id {
+        if puzzle.id > *to_id {
+            return true;
+        }
+    }
+
     false
 }
 
@@ -252,6 +282,17 @@ fn skip_reason(puzzle: &Puzzle, config: &Config) -> String {
     if let Some(excluded) = config.exclude_pieces.iter().find(|p| piece_chars.contains(p)) {
         return format!("contains excluded piece '{}'", excluded);
     }
+    if let Some(from_id) = &config.from_puzzle_id {
+        if puzzle.id < *from_id {
+            return format!("ID {} < from ID {}", puzzle.id, from_id);
+        }
+    }
+    if let Some(to_id) = &config.to_puzzle_id {
+        if puzzle.id > *to_id {
+            return format!("ID {} > to ID {}", puzzle.id, to_id);
+        }
+    }
+
     "unknown reason (this shouldn't happen)".to_string()
 }
 
