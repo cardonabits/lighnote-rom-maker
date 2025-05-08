@@ -29,6 +29,7 @@ struct Config {
     max_num_pages: usize,
     from_puzzle_id: Option<String>,
     to_puzzle_id: Option<String>,
+    generate_rom: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -58,6 +59,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             .long("to-puzzle-id")
             .value_name("ID")
             .help("Skip puzzles with IDs lexicographically after this"))
+        .arg(Arg::new("do-not-generate-rom")
+            .long("do-not-generate-rom")
+            .help("Skip generating lightnote.rom file")
+            .action(clap::ArgAction::SetTrue))
         .get_matches();
 
     let config = Config {
@@ -81,6 +86,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         max_num_pages: 16 * 1024 * 1024 / 96,
         from_puzzle_id: matches.get_one::<String>("from-puzzle-id").cloned(),
         to_puzzle_id: matches.get_one::<String>("to-puzzle-id").cloned(),
+        generate_rom: !matches.get_flag("do-not-generate-rom"),
     };
 
     if config.dry_run {
@@ -108,6 +114,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if let Some(to_id) = &config.to_puzzle_id {
             println!("  To puzzle ID: {}", to_id);
         }
+        println!("  ROM generation: {}", if config.generate_rom { "enabled" } else { "disabled" });
     }
 
     let mut rdr = Reader::from_reader(std::io::stdin());
@@ -179,6 +186,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     if config.verbose && skipped_count > 0 {
         println!("\nSkipped puzzles breakdown:");
         // Could add more detailed breakdown here if needed
+    }
+
+    if config.generate_rom {
+        generate_rom(puzzle_count, page_count)?;
     }
 
     Ok(())
@@ -339,6 +350,87 @@ pub fn apply_move(fen: &str, chess_move: &ChessMove) -> Result<(String, char), C
     expanded.replace_range(chess_move.to as usize..=chess_move.to as usize, &to_piece.to_string());
     
     Ok((compress_fen(&expanded), from_char))
+}
+
+fn generate_rom(puzzle_count: usize, row_count: usize) -> Result<(), Box<dyn Error>> {
+    const ROW_SIZE: usize = 96;
+    const MAX_MOVES_PER_PUZZLE: usize = 4;
+    const MAX_PUZZLE_SIZE: usize = ROW_SIZE * MAX_MOVES_PER_PUZZLE;
+    const FLASH_SIZE: usize = 16_777_216;
+    const CONFIG_SECTOR_SIZE: usize = 0x1000;
+
+    let rom_file = "lightnote.rom";
+    let _ = fs::remove_file(rom_file);
+
+    println!("Generating rom file...");
+    
+    // Collect and sort puzzle files
+    let mut puzzle_files = fs::read_dir("fenpuzzles")?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            if entry.file_name().to_string_lossy().ends_with(".txt") {
+                Some(entry.path())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    puzzle_files.sort();
+
+    // Write puzzle data
+    let mut rom_data = Vec::new();
+    for file in puzzle_files {
+        let content = fs::read_to_string(&file)?;
+        let trimmed = content.trim_end();
+        if trimmed.len() > ROW_SIZE {
+            return Err(format!("Puzzle data too large in {:?}", file).into());
+        }
+        rom_data.extend_from_slice(trimmed.as_bytes());
+        // Pad to ROW_SIZE
+        rom_data.resize(rom_data.len() + (ROW_SIZE - trimmed.len()), 0);
+    }
+
+    let padded_size = rom_data.len();
+    let free_space = FLASH_SIZE - CONFIG_SECTOR_SIZE - padded_size;
+    if free_space < MAX_PUZZLE_SIZE {
+        println!("Warning: Only {} bytes free - may not fit next puzzle", free_space);
+    }
+
+    // Pad to config sector
+    rom_data.resize(FLASH_SIZE - CONFIG_SECTOR_SIZE, 0);
+
+    // Write config sector
+    let mut config_sector = Vec::new();
+    // magic: u32 = 0x11131719
+    config_sector.extend_from_slice(&0x11131719u32.to_le_bytes());
+    // num_pages: u32 (a record is 1 page)
+    config_sector.extend_from_slice(&(row_count as u32).to_le_bytes());
+    // total_size: u32
+    config_sector.extend_from_slice(&((row_count * ROW_SIZE) as u32).to_le_bytes());
+    // num_types: u8
+    config_sector.push(0x1);
+    // font_size: u8
+    config_sector.push(0x1);
+    // reserved0, reserved1
+    config_sector.extend_from_slice(&0u16.to_le_bytes());
+    // type0: u8 (ChessPuzzle = 4)
+    config_sector.push(0x4);
+    // type1-3: u8
+    config_sector.extend_from_slice(&[0u8; 3]);
+    // size0: u32
+    config_sector.extend_from_slice(&(ROW_SIZE as u32).to_le_bytes());
+    // size1-3: u32
+    config_sector.extend_from_slice(&[0u8; 12]);
+    // Fill remaining config sector with zeros
+    config_sector.resize(CONFIG_SECTOR_SIZE, 0);
+
+    // Combine and write final ROM
+    rom_data.extend_from_slice(&config_sector);
+    fs::write(rom_file, rom_data)?;
+
+    println!("{} puzzles in {} bytes...", puzzle_count, padded_size);
+    println!("Done");
+    Ok(())
 }
 
 fn process_puzzle(puzzle: &Puzzle, config: &Config) -> Result<(), Box<dyn Error>> {
