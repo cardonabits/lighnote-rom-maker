@@ -26,7 +26,6 @@ struct Config {
     min_rating: u32,
     exclude_pieces: Vec<char>,
     last_move_pieces: Vec<char>,
-    max_num_pages: usize,
     from_puzzle_id: Option<String>,
     to_puzzle_id: Option<String>,
     generate_rom: bool,
@@ -83,7 +82,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             .to_lowercase()
             .chars()
             .collect(),
-        max_num_pages: 16 * 1024 * 1024 / 96,
         from_puzzle_id: matches.get_one::<String>("from-puzzle-id").cloned(),
         to_puzzle_id: matches.get_one::<String>("to-puzzle-id").cloned(),
         generate_rom: !matches.get_flag("do-not-generate-rom"),
@@ -126,12 +124,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Found {} records (including header)", total_records + 1);
     
     let pb = ProgressBar::new(total_records as u64);
+    const ROW_SIZE: usize = 96;
+    const FLASH_SIZE: usize = 16_777_216;
+    const CONFIG_SECTOR_SIZE: usize = 0x1000;
+    const MAX_ROM_PAGES: usize = (FLASH_SIZE - CONFIG_SECTOR_SIZE) / ROW_SIZE;
+
     let mut puzzle_count = 0;
     let mut page_count = 0;
     let mut skipped_count = 0;
+    let mut current_puzzle_pages = 0;
 
     // Process each record
     for record in records {
+        // Check if adding this puzzle would exceed capacity
+        if page_count + current_puzzle_pages > MAX_ROM_PAGES {
+            if config.verbose || config.dry_run {
+                println!("ROM capacity reached ({} pages)", MAX_ROM_PAGES);
+            }
+            break;
+        }
         pb.inc(1);
         if config.verbose {
             println!("Processing record: {:?}", record);
@@ -157,20 +168,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
 
         match process_puzzle(&puzzle, &config) {
-            Ok(_) => puzzle_count += 1,
+            Ok(pages) => {
+                current_puzzle_pages = pages;
+                page_count += pages;
+                puzzle_count += 1;
+            }
             Err(e) => {
                 println!("Error processing puzzle {}: {}", puzzle.id, e);
                 continue;
             }
-        }
-        
-        page_count += puzzle.moves.len();
-
-        if page_count > config.max_num_pages {
-            if config.verbose || config.dry_run {
-                println!("Maximum pages limit ({}) reached", config.max_num_pages);
-            }
-            break;
         }
     }
 
@@ -466,7 +472,7 @@ fn generate_rom(row_count: usize) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn process_puzzle(puzzle: &Puzzle, config: &Config) -> Result<(), Box<dyn Error>> {
+fn process_puzzle(puzzle: &Puzzle, config: &Config) -> Result<usize, Box<dyn Error>> {
     let mut current_fen = puzzle.fen.split_whitespace().next().unwrap().to_string();
     let mut processed_moves = 0;
 
@@ -537,5 +543,5 @@ fn process_puzzle(puzzle: &Puzzle, config: &Config) -> Result<(), Box<dyn Error>
         }
     }
 
-    Ok(())
+    Ok(processed_moves)
 }
