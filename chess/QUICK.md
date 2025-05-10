@@ -9,14 +9,16 @@ zstd -d lichess_db_puzzle.csv.zst -o lichess_db_puzzle.csv
 
 See `./genfenpuzzles.sh -h` for filter arguments
 
-## Using the rust re-implementation (Experimental)
-
-```
-cargo run -- --theme-tag mate --min-moves 4 <lichess_db_puzzle.csv
-```
-
 ## To generate rom
 
 ```
 ./fenpuzzles_toflash.sh
 ```
+
+## Using the rust re-implementation (Experimental)
+
+This will generate the puzzle files as well as the ROM in one single step.
+```
+cargo run --release -- --theme-tag mate --min-moves 4 <lichess_db_puzzle.csv
+```
+

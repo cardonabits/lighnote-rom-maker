@@ -189,7 +189,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if config.generate_rom {
-        generate_rom(puzzle_count, page_count)?;
+        generate_rom(page_count)?;
     }
 
     Ok(())
@@ -352,19 +352,22 @@ pub fn apply_move(fen: &str, chess_move: &ChessMove) -> Result<(String, char), C
     Ok((compress_fen(&expanded), from_char))
 }
 
-fn generate_rom(puzzle_count: usize, row_count: usize) -> Result<(), Box<dyn Error>> {
+fn generate_rom(row_count: usize) -> Result<(), Box<dyn Error>> {
     const ROW_SIZE: usize = 96;
-    const MAX_MOVES_PER_PUZZLE: usize = 4;
-    const MAX_PUZZLE_SIZE: usize = ROW_SIZE * MAX_MOVES_PER_PUZZLE;
     const FLASH_SIZE: usize = 16_777_216;
     const CONFIG_SECTOR_SIZE: usize = 0x1000;
+    const MAX_ROM_DATA_SIZE: usize = FLASH_SIZE - CONFIG_SECTOR_SIZE;
 
     let rom_file = "lightnote.rom";
     let _ = fs::remove_file(rom_file);
 
     println!("Generating rom file...");
     
-    // Collect and sort puzzle files
+    // Group puzzle files by their base ID (everything before last hyphen and number)
+    let mut puzzle_groups: Vec<Vec<std::path::PathBuf>> = Vec::new();
+    let mut current_group: Vec<std::path::PathBuf> = Vec::new();
+    let mut current_base = String::new();
+
     let mut puzzle_files = fs::read_dir("fenpuzzles")?
         .filter_map(|entry| {
             let entry = entry.ok()?;
@@ -377,27 +380,57 @@ fn generate_rom(puzzle_count: usize, row_count: usize) -> Result<(), Box<dyn Err
         .collect::<Vec<_>>();
     puzzle_files.sort();
 
-    // Write puzzle data
-    let mut rom_data = Vec::new();
     for file in puzzle_files {
-        let content = fs::read_to_string(&file)?;
-        let trimmed = content.trim_end();
-        if trimmed.len() > ROW_SIZE {
-            return Err(format!("Puzzle data too large in {:?}", file).into());
+        let filename = file.file_name().unwrap().to_string_lossy().into_owned();
+        if let Some(last_hyphen) = filename.rfind('-') {
+            let base = &filename[..last_hyphen];
+            if base != current_base {
+                if !current_group.is_empty() {
+                    puzzle_groups.push(current_group);
+                    current_group = Vec::new();
+                }
+                current_base = base.to_string();
+            }
+            current_group.push(file);
         }
-        rom_data.extend_from_slice(trimmed.as_bytes());
-        // Pad to ROW_SIZE
-        rom_data.resize(rom_data.len() + (ROW_SIZE - trimmed.len()), 0);
+    }
+    if !current_group.is_empty() {
+        puzzle_groups.push(current_group);
     }
 
-    let padded_size = rom_data.len();
-    let free_space = FLASH_SIZE - CONFIG_SECTOR_SIZE - padded_size;
-    if free_space < MAX_PUZZLE_SIZE {
-        println!("Warning: Only {} bytes free - may not fit next puzzle", free_space);
+    // Write puzzle data - only complete puzzles that fit
+    let mut rom_data = Vec::new();
+    let mut actual_puzzle_count = 0;
+    let mut actual_file_count = 0;
+
+    for group in puzzle_groups {
+        // Check if this puzzle will fit
+        let puzzle_size = group.len() * ROW_SIZE;
+        if rom_data.len() + puzzle_size > MAX_ROM_DATA_SIZE {
+            println!("Stopping - next puzzle would exceed ROM capacity");
+            break;
+        }
+
+        // Write all files for this puzzle
+        for file in group {
+            let content = fs::read_to_string(&file)?;
+            let trimmed = content.trim_end();
+            if trimmed.len() > ROW_SIZE {
+                return Err(format!("Puzzle data too large in {:?}", file).into());
+            }
+            rom_data.extend_from_slice(trimmed.as_bytes());
+            // Pad to ROW_SIZE
+            rom_data.resize(rom_data.len() + (ROW_SIZE - trimmed.len()), 0);
+            actual_file_count += 1;
+        }
+        actual_puzzle_count += 1;
     }
+
+    let free_space = MAX_ROM_DATA_SIZE - rom_data.len();
+    println!("Used {} bytes ({} free)", rom_data.len(), free_space);
 
     // Pad to config sector
-    rom_data.resize(FLASH_SIZE - CONFIG_SECTOR_SIZE, 0);
+    rom_data.resize(MAX_ROM_DATA_SIZE, 0);
 
     // Write config sector
     let mut config_sector = Vec::new();
@@ -428,7 +461,7 @@ fn generate_rom(puzzle_count: usize, row_count: usize) -> Result<(), Box<dyn Err
     rom_data.extend_from_slice(&config_sector);
     fs::write(rom_file, rom_data)?;
 
-    println!("{} puzzles in {} bytes...", puzzle_count, padded_size);
+    println!("{} puzzles in {} files...", actual_puzzle_count, actual_file_count);
     println!("Done");
     Ok(())
 }
